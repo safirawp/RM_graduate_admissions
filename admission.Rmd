@@ -1,0 +1,564 @@
+---
+title: "Graduate Admissions Analysis"
+author: "Safira Widya Putri"
+date: "2022-05-30"
+output:
+  html_document:
+    theme: flatly
+    highlight: pygments
+    df_print: paged
+    toc: true
+    toc_float:
+      collapsed: true
+      smooth_scroll: false
+---
+
+```{r setup, include=FALSE}
+# clear-up the environment
+rm(list = ls())
+
+# chunk options
+knitr::opts_chunk$set(echo = TRUE,
+                      message = FALSE,
+                      warning = FALSE,
+                      fig.align = "center")
+options(scipen = 100)
+options(warn=-1)
+options(max.print = 1e+06)
+```
+
+<style>
+body {
+text-align: justify}
+</style>
+
+## Introduction
+
+In this project, we will use graduate admission dataset from [Kaggle](https://www.kaggle.com/datasets/mohansacharya/graduate-admissions). Our objectives are to predict the chance of admit and analyze the relationship between variables using linear regression model.
+
+First, we must import the library.
+
+```{r message=FALSE}
+library(lubridate)
+library(dplyr)
+library(GGally)
+library(ggplot2)
+library(plotly)
+library(glue)
+library(scales)
+library(MLmetrics)
+library(lmtest)
+library(car)
+library(performance)
+```
+
+## Data Preparation
+
+### Input Data
+
+Input our data and put it into `admission` object.
+
+```{r message=FALSE}
+admission <- read.csv("Admission_Predict_Ver1.1.csv")
+```
+
+Overview our data:
+
+```{r message=FALSE}
+head(admission)
+```
+
+### Data Structure
+
+Check the number of columns and rows.
+
+```{r message=FALSE}
+dim(admission)
+```
+Data contains 500 rows and 9 columns.
+
+View all columns and the data types.
+
+```{r message=FALSE}
+glimpse(admission)
+```
+The dataset contains variables:
+
+1. GRE Scores (out of 340)
+
+2. TOEFL Scores (out of 120)
+
+3. University Rating (out of 5)
+
+4. Statement of Purpose (out of 5)
+
+5. Letter of Recommendation Strength (out of 5)
+
+6. Undergraduate GPA (out of 10)
+
+7. Research Experience (either 0 or 1)
+
+8. Chance of Admit (ranging from 0 to 1)
+
+### Pre-processing Data
+
+We will adjust data type of ***Research***, ***LOR***, ***SOP*** and ***University.Rating***, then delete ***-Serial.No.*** column.
+
+```{r}
+admission <- admission %>% 
+  select(-Serial.No.) %>% 
+  mutate_at(vars(Research, LOR, SOP, University.Rating), as.factor)
+```
+
+Next, checking the missing value.
+
+```{r message=FALSE}
+colSums(is.na(admission))
+```
+No missing value found.
+
+## Exploratory Data Analysis
+
+Let's see the summary of all columns.
+
+```{r message=FALSE}
+summary(admission)
+```
+We will use ***Chance of Admit*** as Target Variable. We need to see the distribution.
+
+```{r}
+ggplot(admission, aes(x = Chance.of.Admit, fill = ..count..)) +
+  geom_histogram() +
+  ggtitle("Chance of Admit Histogram") +
+  ylab("Frequency") +
+  xlab("Chance of Admit") + 
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme_minimal()
+```
+
+```{r}
+ggplot(admission, aes(y = Chance.of.Admit)) +
+  geom_boxplot(colour="dark blue", outlier.colour="red") +
+  labs(title = "Chance of Admit Boxplot",
+        x = "",
+        y = "Chance of Admit") +
+  theme_minimal()
+```
+
+Relationship between ***Chance of Admit*** and other variables.
+
+<div class = "row">
+  
+<div class = "col-md-4">
+```{r}
+ggplot(admission, aes(x=Chance.of.Admit, y=GRE.Score)) +
+  geom_point() + 
+  geom_smooth(method=lm, se=FALSE, fullrange=TRUE)
+```
+
+</div>
+  
+<div class = "col-md-4">
+```{r}
+ggplot(admission, aes(x=Chance.of.Admit, y=TOEFL.Score)) +
+  geom_point() + 
+  geom_smooth(method=lm, se=FALSE, fullrange=TRUE)
+```
+
+</div>
+
+<div class = "col-md-4">
+```{r}
+ggplot(admission, aes(x=Chance.of.Admit, y=CGPA)) +
+  geom_point() + 
+  geom_smooth(method=lm, se=FALSE, fullrange=TRUE)
+```
+
+</div>
+</div>
+
+```{r}
+ggcorr(admission, label = TRUE, label_size = 2.9, hjust = 1, layout.exp = 2, low = "black", high = "blue")
+```
+
+From the result above, ***GRE Score***, ***TOEFL Score***, and ***CGPA*** have linearity and strong correlation with ***Chance of Admit***.
+
+## Create Model
+
+Before we create the model, we need to split the data into train dataset and test dataset. We will use the train dataset to create linear regression model and the test dataset will be used as a comparasion to see if the model get overfit or can not predict new data. We will use 80% of the data as the training data and the rest of it as the testing data.
+
+```{r}
+RNGkind(sample.kind = "Rounding")
+set.seed(100)
+index <- sample(nrow(admission), nrow(admission) *0.8)
+data_train <- admission[index, ]
+data_test <- admission[-index, ]
+```
+
+### Model - Strong Correlation
+
+First model, we will use variables that have strong correlation with ***Chance of Admit***, we named it `model_corr`.
+
+```{r}
+model_corr <- lm(formula = Chance.of.Admit ~ CGPA + TOEFL.Score + GRE.Score, data_train)
+summary(model_corr)
+```
+
+### Model - All variables
+
+Next, create model include all variables `model_all`.
+
+```{r}
+model_all <- lm(formula = Chance.of.Admit ~ ., data_train)
+summary(model_all)
+```
+
+### Model - Feature Selection
+
+We can use Step-wise Regression to finding a combination of predictors that produces the best model based on AIC value. There are 3 types of Step-wise Regression such as Forward, Backward, and both. We will use Step-wise both. We named it `model_stepwise`
+
+```{r}
+model_none <- lm(formula = Chance.of.Admit ~ 1, data = data_train)
+model_stepwise <- step(
+  object = model_none,
+  direction = "both",
+  scope = list(upper = model_all),
+  trace = FALSE)
+summary(model_stepwise)
+```
+
+## Model Evaluation
+
+### Model Performance
+
+```{r}
+performance <- compare_performance(model_corr, model_all, model_stepwise)
+as.data.frame(performance)
+```
+
+Based on the R Squared Adjusted, the result of all models are not much different. The stepwise model can be chosen because it does not use all variables or just selected the best variables, also the AIC value is the lowest compared others.
+
+### Assumptions {.tabset}
+
+#### Linearity
+
+As mentioned before, all numeric variables have strong correlation with ***Chance of Admit***. So the assumptions linearity test is fulfilled. If we want to make sure, we can use statistics test with `cor.test`.
+
+```{r}
+cor.test(admission$Chance.of.Admit, admission$GRE.Score)
+```
+
+```{r}
+cor.test(admission$Chance.of.Admit, admission$CGPA)
+```
+
+```{r}
+cor.test(admission$Chance.of.Admit, admission$TOEFL.Score)
+```
+
+Linearity hypothesis test:
+
+* H0: Correlation not significant (cor = 0)
+* H1: Correlation significant (cor != 0)
+
+All variables have p-value < alpha (0.05), we can not accept H0, correlation significant.
+
+#### Normality of Residuals
+
+```{r}
+hist(model_stepwise$residuals)
+```
+
+```{r}
+shapiro.test(model_all$residuals)
+```
+Shapiro-Wilk hypothesis test:
+
+* H0: Variable is normally distributed
+* H1: Variable is not normally distributed
+
+As we can see, p-value < alpha (0.05), so the residuals is not normally distributed.
+
+#### Homoscedasticity of Residuals
+
+```{r}
+bptest(model_stepwise)
+```
+Breusch-Pagan hypothesis test:
+
+* H0: Homoscedasticity is present (the residuals are distributed with equal variance)
+* H1 : Heteroscedasticity is present (the residuals are not distributed with equal variance)
+
+The result shows p-value < alpha (0.05), so the residuals are not distributed with equal variance.
+
+#### No Multicollinearity
+
+```{r}
+vif(model_stepwise)
+```
+VIF (Variance Inflation Factor) test:
+
+* VIF value > 10: there is multicollinear predictors in model
+* VIF value < 10: there is no multicollinear predictors in model
+
+VIF all variables less than 10, so there is no multicollinear predictors in model.
+
+
+
+
+
+
+
+
+## Model Improvement
+
+### Remove Outlier
+
+The assumption of normality and heteroscadicity are not fulfilled. We will try to remove outlier and transform the data. Based on exploratory data before, ***Chance of Admit*** have outliers, we can delete the outliers and create the model.
+
+```{r}
+quartiles <- quantile(admission$Chance.of.Admit, probs=c(.25, .75), na.rm = FALSE)
+IQR <- IQR(admission$Chance.of.Admit)
+ 
+Lower <- quartiles[1] - 1.5*IQR
+Upper <- quartiles[2] + 1.5*IQR 
+ 
+admission_no_outlier <- subset(admission, admission$Chance.of.Admit > Lower & admission$Chance.of.Admit < Upper)
+ 
+dim(admission_no_outlier)
+```
+
+```{r}
+RNGkind(sample.kind = "Rounding")
+set.seed(100)
+index2 <- sample(nrow(admission_no_outlier), nrow(admission_no_outlier) *0.8)
+data_train2 <- admission_no_outlier[index2, ]
+data_test2 <- admission_no_outlier[-index2, ]
+```
+
+```{r}
+model_no_outlier <- lm(formula = Chance.of.Admit ~ ., data_train2)
+summary(model_no_outlier)
+```
+
+#### Check Assumption {.tabset}
+
+Linearity assumption is fulfilled, we need to check other assumptions.
+
+##### Normality of Residuals
+
+```{r}
+hist(model_no_outlier$residuals)
+```
+
+```{r}
+shapiro.test(model_no_outlier$residuals)
+```
+
+Result: p-value < alpha (0.05), the residuals is not normally distributed.
+
+##### Homoscedasticity of Residuals
+
+```{r}
+bptest(model_no_outlier)
+```
+Result: p-value < alpha (0.05), the residuals are not distributed with equal variance.
+
+##### No Multicollinearity
+
+```{r}
+vif(model_no_outlier)
+```
+
+Result: VIF value < 10, there is no multicollinear predictors in model.
+
+### Transform Target-Var (Arcsin)
+
+#### Subset Data and Create Model
+
+```{r}
+admission_transform_y <- admission %>%
+  select(Chance.of.Admit, CGPA, GRE.Score, LOR, TOEFL.Score, Research) %>%
+  mutate(Chance.of.Admit = asin(sqrt(Chance.of.Admit)))
+```
+
+```{r}
+RNGkind(sample.kind = "Rounding")
+set.seed(100)
+index3 <- sample(nrow(admission_transform_y), nrow(admission_transform_y) *0.8)
+data_train3 <- admission_transform_y[index3, ]
+data_test3 <- admission_transform_y[-index3, ]
+```
+
+```{r}
+model_transform_y <- lm(formula = Chance.of.Admit ~ ., data_train3)
+summary(model_transform_y)
+```
+
+#### Check Assumption {.tabset}
+
+##### Normality of Residuals
+
+```{r}
+hist(model_transform_y$residuals)
+```
+
+```{r}
+shapiro.test(model_transform_y$residuals)
+```
+
+Result: p-value < alpha (0.05), the residuals is not normally distributed.
+
+##### Homoscedasticity of Residuals
+
+```{r}
+bptest(model_transform_y)
+```
+Result: p-value > alpha (0.05), the residuals are distributed with equal variance.
+
+##### No Multicollinearity
+
+```{r}
+vif(model_transform_y)
+```
+
+Result: VIF value < 10, there is no multicollinear predictors in model.
+
+### Transform Predictor-Var (log10)
+
+#### Subset Data and Create Model
+
+```{r}
+admission_transform_x <- admission %>%
+  select(Chance.of.Admit, CGPA, GRE.Score, LOR, TOEFL.Score, Research) %>%
+  mutate_at(vars(CGPA, GRE.Score, TOEFL.Score), ~log10(.)) %>%
+  mutate(Chance.of.Admit = asin(sqrt(Chance.of.Admit)))
+```
+
+```{r}
+RNGkind(sample.kind = "Rounding")
+set.seed(100)
+index3 <- sample(nrow(admission_transform_x), nrow(admission_transform_x) *0.8)
+data_train3 <- admission_transform_x[index3, ]
+data_test3 <- admission_transform_x[-index3, ]
+```
+
+```{r}
+model_transform_x <- lm(formula = Chance.of.Admit ~ ., data_train3)
+summary(model_transform_x)
+```
+
+#### Check Assumption  {.tabset}
+
+##### Normality of Residuals
+
+```{r}
+hist(model_transform_x$residuals)
+```
+
+```{r}
+shapiro.test(model_transform_x$residuals)
+```
+
+Result: p-value < alpha (0.05), the residuals is not normally distributed.
+
+##### Homoscedasticity of Residuals
+
+```{r}
+bptest(model_transform_x)
+```
+
+Result: p-value > alpha (0.05), the residuals are distributed with equal variance.
+
+##### No Multicollinearity
+
+```{r}
+vif(model_transform_x)
+```
+
+Result: VIF value < 10: there is no multicollinear predictors in model.
+
+### Transform Predictor-Var (sqrt)
+
+#### Subset Data and Create Model
+
+```{r}
+admission_transform_x2 <- admission%>%
+  select(Chance.of.Admit, CGPA, GRE.Score, LOR, TOEFL.Score, Research) %>%
+  mutate_at(vars(CGPA, GRE.Score, TOEFL.Score), ~sqrt(.)) %>%
+  mutate(Chance.of.Admit = asin(sqrt(Chance.of.Admit)))
+```
+
+```{r}
+RNGkind(sample.kind = "Rounding")
+set.seed(100)
+index4 <- sample(nrow(admission_transform_x2), nrow(admission_transform_x2) *0.8)
+data_train4 <- admission_transform_x2[index4, ]
+data_test4 <- admission_transform_x2[-index4, ]
+```
+
+```{r}
+model_transform_x2 <- lm(formula = Chance.of.Admit ~ ., data_train4)
+summary(model_transform_x2)
+```
+
+#### Check Assumption {.tabset}
+
+##### Normality of Residuals
+
+```{r}
+hist(model_transform_x2$residuals)
+```
+
+```{r}
+shapiro.test(model_transform_x2$residuals)
+```
+
+Result: p-value < alpha (0.05), the residuals is not normally distributed.
+
+##### Homoscedasticity of Residuals
+
+```{r}
+bptest(model_transform_x2)
+```
+Result: p-value > alpha (0.05), the residuals are distributed with equal variance.
+
+##### No Multicollinearity
+
+```{r}
+vif(model_transform_x2)
+```
+
+Result: VIF value < 10, there is no multicollinear predictors in model.
+
+## Performance and Prediction
+
+```{r}
+performance_model <- compare_performance(model_no_outlier, model_transform_y, model_transform_x, model_transform_x2)
+as.data.frame(performance_model)
+```
+
+We created `model_no_outlier`, `model_transform_y`, `model_transform_x`, and `model_transform_x2`. The assumption test of `model_no_outlier` is still not fulfilled the normality and homoscedasticity test. Others model fulfilled the homoscedasticity, but unfortunately not the normality test. Meanwhile, we can use the best model we had based on the R Squared Adjusted above. We will use the `model_transform_y`for prediction.
+
+```{r}
+model_pred <- predict(model_transform_y, newdata = data_test3 %>% select(-Chance.of.Admit))
+
+# RMSE of train dataset
+RMSE(y_pred = (model_transform_y$fitted.values), y_true = sin(data_train3$Chance.of.Admit)^2)
+```
+
+```{r}
+# RMSE of test dataset
+RMSE(y_pred = (model_pred), y_true = sin(data_test3$Chance.of.Admit)^2)
+```
+
+The results turned out that data test produce larger RMSE than data train. So it can be concluded that the model is overfit.
+
+## Conclusion
+
+1. The best model we created is `model_transform_y` with R Square Adjusted 86.24%.
+2. Variables that significant to ***Chance of Admit*** are: ***GRE.Score***, ***TOEFL.Score***, ***CGPA***, and ***Research***. We can conclude that student need to have good ***GRE.Score***, ***TOEFL.Score***, and ***CGPA***, also have ***Research*** Experience in order to have a higher ***Chance of Admit***.
+3. From the result, we know that the normality test is still not fulfilled although we did the transformation and remove the outlier. This may be due to the small size of the dataset.
+4. For future project, we can try to adjust the proportion of training-test, increase size of the dataset, using other transformation techniques, or analyze using other methods.
+
+
